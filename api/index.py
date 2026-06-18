@@ -1,7 +1,7 @@
 import os, traceback, asyncio
 import httpx
 import base64
-from urllib.parse import quote
+import re
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from io import BytesIO
@@ -9,8 +9,11 @@ from io import BytesIO
 app = FastAPI()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
+
+HF_SPACE_URL = "https://alex2026daaaa-flux-schnell-clean.hf.space/api/predict"
+HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 MAX_RETRIES = 3
 
 GEMINI_PROMPT = """You are an expert AI image analyst. Your task is to describe this image in EXTREME DETAIL so another AI can recreate it as closely as possible.
@@ -65,14 +68,39 @@ async def clean_image(file: UploadFile = File(...)):
         except (KeyError, IndexError):
             return JSONResponse(status_code=502, content={"error": "Gemini returned unexpected response"})
 
-        prompt_encoded = quote(prompt[:1500])
-        gen_url = f"{POLLINATIONS_BASE}/{prompt_encoded}?width=1080&height=1920&nofeed=true"
+        # Try HF Space (Gradio API), fallback to Inference API
+        image_bytes = None
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            # Try Space
+            try:
+                space_resp = await client.post(
+                    HF_SPACE_URL,
+                    json={"data": [prompt[:1500]]},
+                    headers={"Content-Type": "application/json"},
+                )
+                if space_resp.status_code == 200:
+                    data = space_resp.json()
+                    img_url = data["data"][0]["url"]
+                    if img_url.startswith("data:image"):
+                        b64 = img_url.split(",", 1)[1]
+                        image_bytes = base64.b64decode(b64)
+            except Exception:
+                pass
 
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            gen_resp = await client.get(gen_url)
-            gen_resp.raise_for_status()
+            # Fallback to Inference API
+            if image_bytes is None and HF_TOKEN:
+                infer_resp = await client.post(
+                    HF_INFERENCE_URL,
+                    json={"inputs": prompt[:1500]},
+                    headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                )
+                if infer_resp.status_code == 200:
+                    image_bytes = infer_resp.content
 
-        return StreamingResponse(BytesIO(gen_resp.content), media_type=gen_resp.headers.get("content-type", "image/png"))
+            if image_bytes is None:
+                return JSONResponse(status_code=502, content={"error": "Image generation failed (both Space and Inference API)"})
+
+        return StreamingResponse(BytesIO(image_bytes), media_type="image/jpeg")
 
     except httpx.HTTPStatusError as e:
         return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})

@@ -13,12 +13,23 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5
 POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 MAX_RETRIES = 3
 
-GEMINI_PROMPT = """You are an AI image analyzer. Describe this image in detail for an AI image generator.
-Rules:
-- If there is any text, logo, or branding related to "Поліс ЮЕй" — do NOT include it in the description.
-- Replace branded elements with neutral alternatives (e.g., "a modern insurance company logo" instead of the actual logo).
-- Focus on: composition, colors, people (pose, clothing, expression), objects, background, lighting, text (except banned).
-- Return ONLY the description — no greetings, no explanations, no extra words."""
+GEMINI_PROMPT = """You are an expert AI image analyst. Your task is to describe this image in EXTREME DETAIL so another AI can recreate it as closely as possible.
+
+REQUIRED in your description:
+- Read ALL text visible in the image (except anything containing "Поліс ЮЕй") — include the text content, font style, color, size, position
+- Describe the exact composition: where elements are placed (left/right/center/top/bottom)
+- People: gender, approximate age, clothing (colors, style), pose, facial expression, hairstyle, accessories
+- Objects: every visible object, its shape, color, size, position
+- Background: colors, gradients, patterns, whether photo/illustration/3D
+- Colors: exact or approximate color scheme, dominant colors
+- Lighting and mood: bright/dim, warm/cold, professional/casual
+- Style: photo, 3D render, flat design, illustration, vector — be specific
+- If there is a logo or branding, describe its shape and colors but replace it with a generic neutral version
+
+RULES:
+- If text or branding says "Поліс ЮЕй" — OMIT it entirely, replace with a generic insurance company name or logo
+- Do NOT add, invent, or imagine extra elements
+- Return ONLY the description — pure text, no greetings, no explanations, no markdown"""
 
 @app.post("/")
 async def clean_image(file: UploadFile = File(...)):
@@ -36,7 +47,7 @@ async def clean_image(file: UploadFile = File(...)):
             }]
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             for attempt in range(MAX_RETRIES):
                 resp = await client.post(
                     f"{GEMINI_URL}?key={GEMINI_API_KEY}",
@@ -54,10 +65,10 @@ async def clean_image(file: UploadFile = File(...)):
         except (KeyError, IndexError):
             return JSONResponse(status_code=502, content={"error": "Gemini returned unexpected response"})
 
-        prompt_encoded = quote(prompt[:500])
+        prompt_encoded = quote(prompt[:1500])
         gen_url = f"{POLLINATIONS_BASE}/{prompt_encoded}?width=1080&height=1920&nofeed=true"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             gen_resp = await client.get(gen_url)
             gen_resp.raise_for_status()
 

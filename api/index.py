@@ -65,14 +65,21 @@ async def clean_image(file: UploadFile = File(...)):
         except (KeyError, IndexError):
             return JSONResponse(status_code=502, content={"error": "Gemini returned unexpected response"})
 
-        prompt_encoded = quote(prompt[:500])
-        gen_url = f"{POLLINATIONS_BASE}/{prompt_encoded}?width=1080&height=1920&nofeed=true"
-
+        image_bytes = None
         async with httpx.AsyncClient(timeout=60.0) as client:
-            gen_resp = await client.get(gen_url)
-            gen_resp.raise_for_status()
+            prompt_encoded = quote(prompt[:800])
+            models = ["flux", "turbo"]
+            for model in models:
+                gen_url = f"{POLLINATIONS_BASE}/{prompt_encoded}?width=1080&height=1920&model={model}&nofeed=true&seed=42"
+                resp = await client.get(gen_url)
+                if resp.status_code == 200 and len(resp.content) > 2000:
+                    image_bytes = resp.content
+                    break
 
-        return StreamingResponse(BytesIO(gen_resp.content), media_type=gen_resp.headers.get("content-type", "image/png"))
+        if image_bytes is None:
+            return JSONResponse(status_code=502, content={"error": "Image generation failed"})
+
+        return StreamingResponse(BytesIO(image_bytes), media_type="image/jpeg")
 
     except httpx.HTTPStatusError as e:
         return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})

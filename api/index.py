@@ -1,7 +1,6 @@
 import os, traceback, asyncio
 import httpx
 import base64
-import re
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from io import BytesIO
@@ -9,10 +8,8 @@ from io import BytesIO
 app = FastAPI()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+REPLICATE_TOKEN = os.environ.get("REPLICATE_TOKEN", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-
-HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 MAX_RETRIES = 3
 
 GEMINI_PROMPT = """You are an expert AI image analyst. Your task is to describe this image in EXTREME DETAIL so another AI can recreate it as closely as possible.
@@ -67,17 +64,29 @@ async def clean_image(file: UploadFile = File(...)):
         except (KeyError, IndexError):
             return JSONResponse(status_code=502, content={"error": "Gemini returned unexpected response"})
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            infer_resp = await client.post(
-                HF_INFERENCE_URL,
-                json={"inputs": prompt[:1000]},
-                headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            )
-            if infer_resp.status_code != 200:
-                return JSONResponse(status_code=502, content={"error": f"Inference API returned {infer_resp.status_code}", "detail": infer_resp.text[:500]})
-            image_bytes = infer_resp.content
+        import replicate
+        output = await asyncio.to_thread(
+            replicate.run,
+            "black-forest-labs/flux-schnell",
+            input={
+                "prompt": prompt[:1000],
+                "num_inference_steps": 4,
+                "num_outputs": 1,
+                "width": 1080,
+                "height": 1920,
+            },
+            api_token=REPLICATE_TOKEN,
+        )
 
-        return StreamingResponse(BytesIO(image_bytes), media_type="image/jpeg")
+        if not output or not isinstance(output, list) or not output[0]:
+            return JSONResponse(status_code=502, content={"error": "Replicate returned empty output"})
+
+        img_url = output[0]
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            img_resp = await client.get(img_url)
+            img_resp.raise_for_status()
+
+        return StreamingResponse(BytesIO(img_resp.content), media_type="image/jpeg")
 
     except httpx.HTTPStatusError as e:
         return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})

@@ -1,1 +1,7 @@
-{}
+{
+  "functions": {
+    "api/clean.py": {
+      "runtime": "@vercel/python@3.12"
+    }
+  }
+}

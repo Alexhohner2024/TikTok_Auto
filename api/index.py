@@ -12,7 +12,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
-HF_SPACE_URL = "https://alex2026daaaa-flux-schnell-clean.hf.space/api/predict"
 HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 MAX_RETRIES = 3
 
@@ -68,37 +67,15 @@ async def clean_image(file: UploadFile = File(...)):
         except (KeyError, IndexError):
             return JSONResponse(status_code=502, content={"error": "Gemini returned unexpected response"})
 
-        # Try HF Space (Gradio API), fallback to Inference API
-        image_bytes = None
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            # Try Space
-            try:
-                space_resp = await client.post(
-                    HF_SPACE_URL,
-                    json={"data": [prompt[:1500]]},
-                    headers={"Content-Type": "application/json"},
-                )
-                if space_resp.status_code == 200:
-                    data = space_resp.json()
-                    img_url = data["data"][0]["url"]
-                    if img_url.startswith("data:image"):
-                        b64 = img_url.split(",", 1)[1]
-                        image_bytes = base64.b64decode(b64)
-            except Exception:
-                pass
-
-            # Fallback to Inference API
-            if image_bytes is None and HF_TOKEN:
-                infer_resp = await client.post(
-                    HF_INFERENCE_URL,
-                    json={"inputs": prompt[:1500]},
-                    headers={"Authorization": f"Bearer {HF_TOKEN}"},
-                )
-                if infer_resp.status_code == 200:
-                    image_bytes = infer_resp.content
-
-            if image_bytes is None:
-                return JSONResponse(status_code=502, content={"error": "Image generation failed (both Space and Inference API)"})
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            infer_resp = await client.post(
+                HF_INFERENCE_URL,
+                json={"inputs": prompt[:1000]},
+                headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            )
+            if infer_resp.status_code != 200:
+                return JSONResponse(status_code=502, content={"error": f"Inference API returned {infer_resp.status_code}", "detail": infer_resp.text[:500]})
+            image_bytes = infer_resp.content
 
         return StreamingResponse(BytesIO(image_bytes), media_type="image/jpeg")
 
